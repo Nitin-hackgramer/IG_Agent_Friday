@@ -1,4 +1,4 @@
-**Ig-Agent (Instagram) — Interactive DM Agent**
+***Ig-Agent (Instagram) — Interactive DM Agent***
 
 A lightweight Instagram DM agent that uses Groq LLM for on-the-fly DM generation and Supabase/Postgres for persistent memory. Built with FastAPI and LangGraph, this project demonstrates a production-capable conversational automation with a human takeover flow (takeover / botback).
 
