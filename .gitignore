@@ -6,6 +6,8 @@ dist/
 wheels/
 *.egg-info
 .env
+temp/model.py
+temp/temp.txt
 
 # Virtual environments
 .venv
