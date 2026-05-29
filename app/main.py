@@ -12,31 +12,9 @@ from app.services.takeover_service import (
 from app.graph.workflow import builder
 import logging
 
-app = FastAPI()
 logger = logging.getLogger("uvicorn")
 
 VERIFY_TOKEN = "testtest"
-
-
-@app.get("/webhook")
-async def verify_webhook(request: Request):
-    """Handles Meta's initial handshake verification request."""
-    params = request.query_params
-    mode = params.get("hub.mode")
-    token = params.get("hub.verify_token")
-    challenge = params.get("hub.challenge")
-
-    if mode == "subscribe" and token == VERIFY_TOKEN:
-        logger.info("Webhook successfully verified.")
-
-        # Meta strictly expects the exact challenge string back as a plain text response
-        return Response(
-            content=challenge, media_type="text/plain", status_code=status.HTTP_200_OK
-        )
-
-    return Response(
-        content="Verification token mismatch", status_code=status.HTTP_400_BAD_REQUEST
-    )
 
 
 @asynccontextmanager
@@ -75,6 +53,32 @@ async def app_lifespan(app: FastAPI):
 
 # Bind the lifespan context manager explicitly into the core FastAPI container
 app = FastAPI(lifespan=app_lifespan)
+
+
+@app.get("/")
+async def root():
+    return {"status": "ok"}
+
+
+@app.get("/webhook")
+async def verify_webhook(request: Request):
+    """Handles Meta's initial handshake verification request."""
+    params = request.query_params
+    mode = params.get("hub.mode")
+    token = params.get("hub.verify_token")
+    challenge = params.get("hub.challenge")
+
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        logger.info("Webhook successfully verified.")
+
+        # Meta strictly expects the exact challenge string back as a plain text response
+        return Response(
+            content=challenge, media_type="text/plain", status_code=status.HTTP_200_OK
+        )
+
+    return Response(
+        content="Verification token mismatch", status_code=status.HTTP_400_BAD_REQUEST
+    )
 
 
 async def handle_message_processing(psid: str, incoming_text: str, agent_engine):
