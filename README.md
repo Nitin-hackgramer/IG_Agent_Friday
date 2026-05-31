@@ -1,4 +1,4 @@
-***Ig-Agent (Instagram) — Interactive DM Agent***
+***Friday Ig-Agent — Interactive Instagram DM Agent***
 
 A lightweight Instagram DM agent that uses Groq LLM for on-the-fly DM generation and Supabase/Postgres for persistent memory. Built with FastAPI and LangGraph, this project demonstrates a production-capable conversational automation with a human takeover flow (takeover / botback).
 
@@ -7,7 +7,7 @@ A lightweight Instagram DM agent that uses Groq LLM for on-the-fly DM generation
 **Current Features**
 
 - **Instagram webhook listener:** inbound events are handled at `/webhook` and acknowledged quickly for Meta compliance.
-- **Groq LLM replies:** Groq-powered conversational generation in [app/graph/nodes.py](app/graph/nodes.py) producing natural DM-style replies.
+- **Groq LLM replies:** Groq-powered conversational generation producing natural DM-style replies.
 - **Persistent memory (Supabase/Postgres):** LangGraph checkpointing via `langgraph.checkpoint.postgres.aio.AsyncPostgresSaver` stores agent state.
 - **Human takeover flow:** Owner can send `takeover` to pause automated replies and `botback` to resume; messages during takeover are persisted and not replied to.
 - **Graceful background processing:** Incoming messages are processed in FastAPI `BackgroundTasks` and mapped to thread-aware checkpoints.

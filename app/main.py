@@ -42,6 +42,8 @@ async def app_lifespan(app: FastAPI):
         app.state.human_takeover = False
         app.state.owner_id = os.getenv("OWNER_ID")
         app.state.takeover_started = None
+        # Users that should receive a 'resume' note on their next incoming message
+        app.state.resume_pending = set()
         logger.info(
             "Agent successfully compiled with persistent Supabase checkpointer."
         )
@@ -81,7 +83,9 @@ async def verify_webhook(request: Request):
     )
 
 
-async def handle_message_processing(psid: str, incoming_text: str, agent_engine):
+async def handle_message_processing(
+    psid: str, incoming_text: str, agent_engine, resumed_after_takeover: bool = False
+):
     """
     Background worker that executes the LangGraph state machine and fires the DM responses with persistent thread mapping configurations.
     """
@@ -97,6 +101,7 @@ async def handle_message_processing(psid: str, incoming_text: str, agent_engine)
         "conversation_summary": "",
         "retrieved_content": "",
         "human_takeover": False,
+        "resumed_after_takeover": resumed_after_takeover,
     }
 
     # Run the graph asynchronously across our node engine
@@ -182,9 +187,25 @@ async def receive_webhook(request: Request, background_tasks: BackgroundTasks):
                             )
                             return Response(content="EVENT_RECEIVED", status_code=200)
 
+                        # If this thread was just flushed during botback, mark it so the next reply resumes properly
+                        resume_flag = False
+                        resume_pending = getattr(
+                            request.app.state, "resume_pending", set()
+                        )
+                        if psid in resume_pending:
+                            resume_flag = True
+                            try:
+                                resume_pending.remove(psid)
+                            except Exception:
+                                pass
+
                         # Hand the processing off to a background thread instantly so we can immediately return 200 OK back to Meta
                         background_tasks.add_task(
-                            handle_message_processing, psid, message_text, live_agent
+                            handle_message_processing,
+                            psid,
+                            message_text,
+                            live_agent,
+                            resume_flag,
                         )
 
                         logger.info(f"User {psid} sent: {message_text}")

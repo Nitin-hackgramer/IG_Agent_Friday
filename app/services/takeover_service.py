@@ -1,25 +1,66 @@
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, List, Tuple
+import os
+from dotenv import load_dotenv
+from langchain_groq import ChatGroq
 
-from app.services.meta_api import send_instagram_dm
+load_dotenv()
 
 logger = logging.getLogger("uvicorn")
 
 
+async def _summarize_messages_llm(msgs: List[Tuple[str, str, datetime]]) -> str:
+    """Use Groq LLM to produce a short private memory summary from buffered messages.
+
+    msgs: list of tuples (sender_id, text, timestamp)
+    Returns a short summary suitable for `conversation_summary`.
+    """
+    if not msgs:
+        return ""
+
+    # Build a compact conversation transcript for summarization
+    turns = []
+    for sender_id, text, ts in msgs:
+        role = "owner" if str(sender_id) == str(os.getenv("OWNER_ID", "")) else "user"
+        turns.append(f"{role}: {text}")
+
+    transcript = "\n".join(turns[-20:])
+
+    prompt = f"""
+Summarize the following short Instagram DM conversation into a single short private memory note (1-2 short sentences).
+Include: relationship hints (friend/family/customer), clear user preferences, and the most recent topic.
+Keep it neutral and concise (no apologies, no assistant reasoning). Return only the summary.
+
+Conversation:
+{transcript}
+"""
+
+    try:
+        llm = ChatGroq(
+            temperature=0.25,
+            groq_api_key=os.getenv("GROQ_API_KEY"),
+            model_name="llama-3.3-70b-versatile",
+        )
+        resp = await llm.ainvoke([("user", prompt)])
+        summary = resp.content.strip()
+        # keep it compact
+        if len(summary) > 200:
+            summary = summary[:197] + "..."
+        return summary
+    except Exception as e:
+        logger.warning(f"LLM summarization failed: {e}")
+        # fallback heuristic: use last two messages
+        fallback = " ".join([t[1] for t in msgs[-2:]])
+        return (fallback[:197] + "...") if len(fallback) > 200 else fallback
+
+
 async def start_takeover(app: Any, owner_id: str) -> None:
-    """Enable human takeover mode and notify owner."""
+    """Enable human takeover mode."""
     app.state.human_takeover = True
     app.state.takeover_owner_id = owner_id
     app.state.takeover_started = datetime.utcnow()
-
-    try:
-        await send_instagram_dm(
-            owner_id,
-            "Takeover ON — bot paused for all users. Conversations will be recorded.",
-        )
-    except Exception as e:
-        logger.error(f"Failed to notify owner about takeover: {e}")
+    logger.info("Takeover mode enabled.")
 
 
 async def save_message(
@@ -97,12 +138,18 @@ async def stop_takeover(app: Any) -> None:
                 )
                 chat_history.append({"role": role, "content": text})
 
+            # Generate a short private summary for the buffered conversation
+            try:
+                conversation_summary = await _summarize_messages_llm(msgs)
+            except Exception:
+                conversation_summary = ""
+
             initial_state = {
                 "user_id": user_id,
                 "incoming_message": "",
                 "agent_response": "",
                 "chat_history": chat_history,
-                "conversation_summary": "",
+                "conversation_summary": conversation_summary,
                 "retrieved_content": "",
                 "human_takeover": False,
                 "skip_response": True,
@@ -114,6 +161,13 @@ async def stop_takeover(app: Any) -> None:
                     initial_state,
                     config={"configurable": {"thread_id": f"instagram_{user_id}"}},
                 )
+                # mark that next incoming message for this user should include a resume note
+                try:
+                    if not hasattr(app.state, "resume_pending"):
+                        app.state.resume_pending = set()
+                    app.state.resume_pending.add(user_id)
+                except Exception:
+                    pass
             except Exception as e:
                 logger.error(
                     f"Error persisting buffered takeover messages for {user_id}: {e}"
@@ -122,12 +176,5 @@ async def stop_takeover(app: Any) -> None:
         # clear buffer
         app.state.takeover_buffer = []
 
-    # Notify owner that bot is back
     if owner_id:
-        try:
-            await send_instagram_dm(
-                owner_id,
-                "Botback — takeover messages saved to memory. Bot resumed and will respond to new messages.",
-            )
-        except Exception as e:
-            logger.error(f"Failed to notify owner about botback: {e}")
+        logger.info("Botback completed and takeover mode disabled.")

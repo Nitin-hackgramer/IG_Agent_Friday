@@ -48,6 +48,68 @@ def polish_dm_response(raw_text: str) -> str:
     return text.strip()
 
 
+def neutralize_gendered_address(text: str) -> str:
+    """
+    Avoid guessing the user's gender or comfort level from an Instagram PSID.
+    """
+    replacements = {
+        r"\bbhai\b": "",
+        r"\bbro\b": "yaar",
+        r"\bdude\b": "",
+        r"\bdidi\b": "",
+        r"\bsis\b": "",
+        r"\bbehen\b": "",
+    }
+    neutral = text
+    for pattern, replacement in replacements.items():
+        neutral = re.sub(pattern, replacement, neutral, flags=re.IGNORECASE)
+    neutral = re.sub(r"\s+", " ", neutral)
+    return neutral.strip()
+
+
+def normalize_for_repeat_check(text: str) -> str:
+    text = text.lower()
+    text = re.sub(r"[^\w\s]", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def get_recent_assistant_replies(
+    history: list[Dict[str, Any]], limit: int = 4
+) -> list[str]:
+    replies = [
+        turn.get("content", "")
+        for turn in history
+        if turn.get("role") == "assistant" and turn.get("content")
+    ]
+    return replies[-limit:]
+
+
+def is_repetitive_reply(candidate: str, history: list[Dict[str, Any]]) -> bool:
+    """
+    Catch short-loop replies like "kya hua?", "kya haal hai?", etc.
+    """
+    normalized_candidate = normalize_for_repeat_check(candidate)
+    if not normalized_candidate:
+        return True
+
+    candidate_words = normalized_candidate.split()
+    for previous in get_recent_assistant_replies(history):
+        normalized_previous = normalize_for_repeat_check(previous)
+        if normalized_candidate == normalized_previous:
+            return True
+
+        previous_words = normalized_previous.split()
+        if len(candidate_words) <= 5 and len(previous_words) <= 5:
+            if normalized_candidate in normalized_previous:
+                return True
+            if normalized_previous in normalized_candidate:
+                return True
+            if candidate_words[:2] == previous_words[:2]:
+                return True
+
+    return False
+
+
 async def summarize_history_node(state: AgentState) -> Dict[str, Any]:
     """
     Node: Detects context size inflation. If history exceeds 6 statements (3 turns),
@@ -121,12 +183,15 @@ Write like a normal Indian college friend texting on Instagram:
 - Casual Hinglish, mostly simple Hindi/English words.
 - 1 short DM only, usually 4-14 words. Max 2 short sentences.
 - Match the user's energy. If they are teasing, tease lightly. If they are serious, be normal and direct.
-- Sound a little imperfect and human: small fillers like "haan", "arre", "bhai", "acha", "matlab" are okay, but do not overuse them.
+- Sound a little imperfect and human: small fillers like "haan", "arre", "acha", "matlab", "yaar" are okay, but do not overuse them.
+- Do not use gendered address words like "bhai", "bro", "didi", "sis", "behen", or "ladki/ladka" unless the user clearly confirmed that exact preference.
+- If you do not know the user's gender, keep the wording neutral. Prefer no address word, or use "yaar" sparingly.
+- Do not reuse the same opening or filler from recent replies. Avoid loops like "kya hua?", "kya haal hai?", or the same greeting again.
 - Do not give lectures, summaries, lists, explanations, or customer-support style replies.
 - Do not repeat the user's exact words back unless it feels natural.
 - Do not mention "history", "memory", "summary", "previous conversation", or how you know something.
 - Use emojis rarely. Most replies should have no emoji.
-- If you are unsure, be casual: "yaad nahi aa raha bhai", "shayad", "pata nahi".
+- If you are unsure, be casual: "yaad nahi aa raha", "shayad", "pata nahi".
 - If the user catches a mistake, accept it casually instead of defending: "haan my bad, mix ho gaya".
 - Never invent personal facts, schedules, college details, relationships, or promises.
 - If asked whether this is an AI/bot/automation, be honest in a simple way.
@@ -134,6 +199,16 @@ Write like a normal Indian college friend texting on Instagram:
 Use memory only as soft background context. Recent user messages matter more than old memory.
 If memory conflicts with the current message, follow the current message.
 """
+
+    # If this message resumes after a human takeover, prepend a clear resume note so the model
+    # prioritizes previous context and avoids generic first-time greetings.
+    if state.get("resumed_after_takeover", False) and summary:
+        resume_note = (
+            "Resume chat with this user. Private memory note: "
+            + summary
+            + "\nDo not open with a first-time greeting; continue the prior conversation naturally.\n\n"
+        )
+        system_instructions = resume_note + system_instructions
 
     if summary:
         system_instructions += f"\n\nPrivate memory note:\n{summary}"
@@ -149,7 +224,38 @@ If memory conflicts with the current message, follow the current message.
     raw_completion = await llm.ainvoke(messages)
 
     # Cleaning the response by removing any internal reasoning
-    polished_output = polish_dm_response(raw_completion.content)
+    polished_output = neutralize_gendered_address(
+        polish_dm_response(raw_completion.content)
+    )
+
+    # Give the model one chance to fix low-effort repeated replies.
+    if is_repetitive_reply(polished_output, history):
+        retry_messages = (
+            messages[:-1]
+            + [
+                (
+                    "system",
+                    "That reply repeats a recent short phrase. Write a fresh neutral DM, "
+                    "no gendered address words, no repeated greeting/opening.",
+                )
+            ]
+            + messages[-1:]
+        )
+        retry_completion = await llm.ainvoke(retry_messages)
+        retry_output = neutralize_gendered_address(
+            polish_dm_response(retry_completion.content)
+        )
+        if retry_output and not is_repetitive_reply(retry_output, history):
+            polished_output = retry_output
+        else:
+            for fallback in (
+                "haan bata, kya scene hai?",
+                "acha, bol kya chal raha?",
+                "samjha, bata phir?",
+            ):
+                if not is_repetitive_reply(fallback, history):
+                    polished_output = fallback
+                    break
 
     # Update short-term history tracking with the latest exchange
     updated_history = list(history)
