@@ -14,6 +14,8 @@ llm = ChatGroq(
     model_name="llama-3.3-70b-versatile",
 )
 
+RECENT_MESSAGE_LIMIT = 24
+
 
 def clean_reasoning_tokens(raw_text: str) -> str:
     """
@@ -54,7 +56,7 @@ def neutralize_gendered_address(text: str) -> str:
     """
     replacements = {
         r"\bbhai\b": "",
-        r"\bbro\b": "yaar",
+        r"\bbro\b": "",
         r"\bdude\b": "",
         r"\bdidi\b": "",
         r"\bsis\b": "",
@@ -112,8 +114,7 @@ def is_repetitive_reply(candidate: str, history: list[Dict[str, Any]]) -> bool:
 
 async def summarize_history_node(state: AgentState) -> Dict[str, Any]:
     """
-    Node: Detects context size inflation. If history exceeds 6 statements (3 turns),
-    it condenses the oldest turn into a unified summary string.
+    Middleware-style node: keep recent DMs raw and summarize older turns.
     """
     # Allow callers to opt-out of any LLM calls (useful during human takeover)
     if state.get("skip_llm", False):
@@ -121,24 +122,23 @@ async def summarize_history_node(state: AgentState) -> Dict[str, Any]:
     history = state.get("chat_history", [])
     current_summary = state.get("conversation_summary", "")
 
-    # If the window is small or history is missing, do nothing and pass state forward
-    if len(history) <= 6:
+    # Keep the short-term window intact for natural replies.
+    if len(history) <= RECENT_MESSAGE_LIMIT:
         return {}
 
-    # Isolate the oldest turn to condense, leaving the last 2 messages intact
-    messages_to_condense = history[:-2]
-    retained_history = history[-2:]
+    messages_to_condense = history[:-RECENT_MESSAGE_LIMIT]
+    retained_history = history[-RECENT_MESSAGE_LIMIT:]
 
-    # Format a prompt specifically for summarizing the history segment
     summary_prompt = f"""
 Progressive summary so far:
 {current_summary}
 
-New older chat turns to integrate:
+Older chat turns to integrate:
 {messages_to_condense}
 
-Rewrite the memory as a short private note for the next reply.
+Rewrite the memory as a concise private summary for the next reply.
 Keep only stable facts the user actually confirmed, their preferences, and important open threads.
+Keep useful relationship/context details, but avoid stale small talk and repeated greetings.
 Do not preserve the assistant's guesses, defensive corrections, filler, or wording style.
 If something is uncertain, mark it as uncertain instead of making it sound proven.
 """

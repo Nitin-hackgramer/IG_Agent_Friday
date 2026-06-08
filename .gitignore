@@ -8,6 +8,9 @@ wheels/
 .env
 temp/model.py
 temp/temp.txt
-
+.tokencap-notes.md
+TOKENCAP.md
+TOKENCAP_MEMORY.md
+TOKENCAP_GRAPH.md
 # Virtual environments
 .venv

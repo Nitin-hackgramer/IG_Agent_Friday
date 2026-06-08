@@ -97,9 +97,6 @@ async def handle_message_processing(
         "user_id": psid,
         "incoming_message": incoming_text,
         "agent_response": "",
-        "chat_history": [],
-        "conversation_summary": "",
-        "retrieved_content": "",
         "human_takeover": False,
         "resumed_after_takeover": resumed_after_takeover,
     }
